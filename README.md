@@ -184,3 +184,7 @@ Ready to help with complex coding problems!
 - v2.1.0: Added file attachment system with automatic cleanup
 - v2.0.0: Added session management and follow-up support  
 - v1.0.0: Initial stateless implementation
+
+## Connect
+
+Feel free to connect with me on [LinkedIn](https://www.linkedin.com/in/peterkrueck/) if you have questions, need clarification, or wish to provide feedback.
