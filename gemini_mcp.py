@@ -52,6 +52,17 @@ Response guidelines:
   - Environment details or deployment context
   - Performance requirements or scale considerations
 
+Enhanced collaboration capabilities:
+- When you need current information: Clearly state "I would search for: [specific search query]" and ask Claude to perform the search
+- When you need to see specific files: Ask Claude directly, e.g., "Claude, can you show me the package.json file?"
+- Be explicit about uncertainty: If you're not sure about something, say so and suggest how to verify it
+- Suggest verification steps: e.g., "Claude, please run 'npm list [package]' to verify the version"
+
+Example collaborative requests:
+- "I would search for: React Router v6 migration guide - Claude, could you search for this?"
+- "This looks like a TypeScript configuration issue. Claude, can you show me the tsconfig.json?"
+- "To ensure compatibility, Claude, please check if this project already uses axios in package.json"
+
 Remember: You're consulting with another AI to help a human developer, so be precise and comprehensive in your technical advice."""
 
 SYSTEM_PROMPT = os.getenv('SYSTEM_PROMPT', DEFAULT_SYSTEM_PROMPT)
@@ -77,10 +88,16 @@ class Session:
     problem_description: Optional[str] = None
     code_context: Optional[str] = None
     processed_files: Dict[str, ProcessedFile] = None
+    requested_files: List[str] = None  # Track files Gemini has requested
+    search_queries: List[str] = None   # Track searches Gemini has requested
     
     def __post_init__(self):
         if self.processed_files is None:
             self.processed_files = {}
+        if self.requested_files is None:
+            self.requested_files = []
+        if self.search_queries is None:
+            self.search_queries = []
 
 class GeminiMCPServer:
     """MCP Server for Gemini file attachment functionality."""
@@ -249,6 +266,38 @@ class GeminiMCPServer:
         self.sessions[session_id] = session
         print(f"[{datetime.now().isoformat()}] New session created: {session_id}", file=sys.stderr)
         return session
+    
+    def _extract_requests_from_response(self, response_text: str, session: Session):
+        """Extract file requests and search queries from Gemini's response."""
+        # Track file requests
+        import re
+        
+        # Pattern for file requests
+        file_patterns = [
+            r"show me (?:the )?([^\s]+\.[a-zA-Z]+)",
+            r"share (?:the )?([^\s]+\.[a-zA-Z]+)",
+            r"can you (?:show|share) (?:me )?([^\s]+\.[a-zA-Z]+)",
+            r"(?:I need to see|please provide) ([^\s]+\.[a-zA-Z]+)",
+        ]
+        
+        for pattern in file_patterns:
+            matches = re.findall(pattern, response_text, re.IGNORECASE)
+            for match in matches:
+                if match not in session.requested_files:
+                    session.requested_files.append(match)
+        
+        # Pattern for search requests
+        search_patterns = [
+            r"I would search for: ([^\n]+)",
+            r"search for (?:the )?([^\n]+)",
+            r"Let me search for ([^\n]+)",
+        ]
+        
+        for pattern in search_patterns:
+            matches = re.findall(pattern, response_text, re.IGNORECASE)
+            for match in matches:
+                if match not in session.search_queries:
+                    session.search_queries.append(match.strip())
 
 # Create server instance
 mcp = FastMCP("gemini-coding-assistant")
@@ -375,7 +424,27 @@ async def consult_gemini(
         
         response_text = response.text
         
-        return f"**Session ID:** {session.session_id}\n**Message #{session.message_count}**\n\n{response_text}\n\n---\n*Use session_id: \"{session.session_id}\" for follow-up questions*"
+        # Extract any file requests or search queries from response
+        gemini_server._extract_requests_from_response(response_text, session)
+        
+        # Build response with session info
+        result_parts = [
+            f"**Session ID:** {session.session_id}",
+            f"**Message #{session.message_count}**\n",
+            response_text
+        ]
+        
+        # Add summary of requests if any
+        if session.requested_files or session.search_queries:
+            result_parts.append("\n\n---")
+            if session.requested_files:
+                result_parts.append(f"\n**Files Requested:** {', '.join(session.requested_files)}")
+            if session.search_queries:
+                result_parts.append(f"\n**Searches Requested:** {'; '.join(session.search_queries)}")
+        
+        result_parts.append(f"\n\n---\n*Use session_id: \"{session.session_id}\" for follow-up questions*")
+        
+        return "\n".join(result_parts)
         
     except Exception as e:
         print(f"[{datetime.now().isoformat()}] Error: {e}", file=sys.stderr)
@@ -389,6 +458,36 @@ async def consult_gemini(
         return f"Error: {error_message}"
 
 @mcp.tool()
+async def get_gemini_requests(session_id: str) -> str:
+    """Get the files and searches that Gemini has requested in a session.
+    
+    Args:
+        session_id: The session ID to check
+    """
+    if session_id not in gemini_server.sessions:
+        return f"Session {session_id} not found"
+    
+    session = gemini_server.sessions[session_id]
+    
+    result_parts = [f"**Session {session_id} Requests:**"]
+    
+    if session.requested_files:
+        result_parts.append(f"\n\n**Files Requested:**")
+        for file in session.requested_files:
+            result_parts.append(f"- {file}")
+    else:
+        result_parts.append("\n\nNo files requested")
+    
+    if session.search_queries:
+        result_parts.append(f"\n\n**Searches Requested:**")
+        for query in session.search_queries:
+            result_parts.append(f"- {query}")
+    else:
+        result_parts.append("\n\nNo searches requested")
+    
+    return "\n".join(result_parts)
+
+@mcp.tool()
 async def list_sessions() -> str:
     """List all active Gemini consultation sessions."""
     session_list = []
@@ -400,13 +499,14 @@ async def list_sessions() -> str:
             "message_count": session.message_count,
             "problem_summary": (session.problem_description[:100] + "...") if session.problem_description else "No description",
             "file_count": len(session.processed_files),
-            "has_code_context": bool(session.code_context)
+            "has_code_context": bool(session.code_context),
+            "requests": len(session.requested_files) + len(session.search_queries)
         }
         session_list.append(session_info)
     
     if session_list:
         session_text = "\n\n".join([
-            f"- **{s['id']}**\n  Messages: {s['message_count']}\n  Created: {s['created']}\n  Last used: {s['last_used']}\n  Files attached: {s['file_count']}\n  Code context: {'Yes' if s['has_code_context'] else 'No'}\n  Problem: {s['problem_summary']}"
+            f"- **{s['id']}**\n  Messages: {s['message_count']}\n  Created: {s['created']}\n  Last used: {s['last_used']}\n  Files attached: {s['file_count']}\n  Code context: {'Yes' if s['has_code_context'] else 'No'}\n  Requests made: {s['requests']}\n  Problem: {s['problem_summary']}"
             for s in session_list
         ])
         text = f"Active sessions:\n{session_text}"
@@ -427,8 +527,8 @@ async def end_session(session_id: str) -> str:
         return f"Session {session_id} not found or already expired"
 
 if __name__ == "__main__":
-    print("Gemini Coding Assistant MCP Server v3.0 running (Python)", file=sys.stderr)
-    print("Features: Session management, file attachments, context persistence, follow-up questions", file=sys.stderr)
+    print("Gemini Coding Assistant MCP Server v3.1 running (Python)", file=sys.stderr)
+    print("Features: Session management, file attachments, context persistence, follow-up questions, request tracking", file=sys.stderr)
     print("Ready to help with complex coding problems!", file=sys.stderr)
     
     mcp.run()
