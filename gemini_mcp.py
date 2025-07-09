@@ -22,7 +22,13 @@ if not os.getenv('GEMINI_API_KEY'):
     sys.exit(1)
 
 # Initialize client
-client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+client_kwargs = {'api_key': os.getenv('GEMINI_API_KEY')}
+if os.getenv('GEMINI_BASE_URL'):
+    client_kwargs['http_options'] = types.HttpOptions(
+        base_url=os.getenv('GEMINI_BASE_URL'),
+        api_version=os.getenv('GEMINI_API_VERSION', 'v1')  # Default to v1 for custom endpoints
+    )
+client = genai.Client(**client_kwargs)
 
 # Configuration
 MODEL_NAME = os.getenv('GEMINI_MODEL', 'gemini-2.5-pro')
