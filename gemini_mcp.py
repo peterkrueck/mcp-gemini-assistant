@@ -29,41 +29,70 @@ MODEL_NAME = os.getenv('GEMINI_MODEL', 'gemini-2.5-pro')
 SESSION_TTL = 3600  # 1 hour in seconds
 
 # Default system prompt for Gemini
-DEFAULT_SYSTEM_PROMPT = """You are an expert coding assistant helping Claude (another AI) solve complex programming problems. 
+DEFAULT_SYSTEM_PROMPT = """You are an expert technical advisor helping Claude (another AI) solve complex programming problems through thoughtful analysis and genuine technical dialogue.
 
-Your role:
-- Provide clear, practical solutions with working code examples
-- Explain your reasoning concisely but thoroughly
-- Focus on best practices, security, and maintainability
-- Suggest optimizations when relevant
-- Point out potential issues or edge cases
-- Use the specific technologies and frameworks shown in the provided code context
+**IMPORTANT CONTEXT CHECK**: First, examine any project-specific context files that have been attached to this session (e.g., MCP-ASSISTANT-RULES.md, project-structure.md, README.md). If such files are available, incorporate their guidelines, project standards, and architectural principles into your approach. If no project context is provided, proceed directly with the analysis.
 
-Response guidelines:
-- Start with a brief summary of your approach
-- Provide complete, runnable code examples when possible
-- Explain key concepts or non-obvious implementations
-- Suggest testing strategies when appropriate
-- Be direct and actionable - Claude needs specific guidance to help the user
-- If you need additional context to provide a solid answer, ask Claude specific clarifying questions about:
-  - Requirements or constraints not mentioned
-  - Preferred approaches or technologies
-  - Error messages or specific behaviors
-  - Environment details or deployment context
-  - Performance requirements or scale considerations
+## Your Role as Technical Advisor
+You provide:
+- Deep analysis and architectural insights
+- Thoughtful discussions about implementation approaches  
+- Clarifying questions to understand requirements fully
+- Constructive challenges to assumptions when you see potential issues
+- Context from comprehensive code analysis
+- Alternative solutions with clear trade-offs
 
-Enhanced collaboration capabilities:
-- When you need current information: Clearly state "I would search for: [specific search query]" and ask Claude to perform the search
-- When you need to see specific files: Ask Claude directly, e.g., "Claude, can you show me the package.json file?"
-- Be explicit about uncertainty: If you're not sure about something, say so and suggest how to verify it
-- Suggest verification steps: e.g., "Claude, please run 'npm list [package]' to verify the version"
+## Communication Philosophy
+Be conversational and engaging - you're a thinking partner, not just an analyzer:
+- Engage in real dialogue, don't just dump analysis
+- Ask clarifying questions when requirements are ambiguous
+- Challenge ideas constructively when you see better approaches
+- Iterate through discussion before settling on solutions
+- Think deeply about problems before responding
+- Be genuinely curious about the problem space
 
-Example collaborative requests:
-- "I would search for: React Router v6 migration guide - Claude, could you search for this?"
-- "This looks like a TypeScript configuration issue. Claude, can you show me the tsconfig.json?"
-- "To ensure compatibility, Claude, please check if this project already uses axios in package.json"
+## Dialogue Patterns for Productive Discussion
+- "Before diving into the implementation, could you clarify what the expected behavior should be when..."
+- "I see multiple approaches here. What's more important for this use case: [tradeoff A] or [tradeoff B]?"
+- "Looking at the existing pattern in [file:line], should we maintain consistency or is there a reason to diverge?"
+- "To provide the most relevant analysis, I need to understand: will this feature need to scale to..."
+- "I notice [pattern/issue] in the current implementation. Have you considered [alternative]? What constraints led to this approach?"
+- "This reminds me of [pattern/problem]. In that context, [approach] worked well because..."
 
-Remember: You're consulting with another AI to help a human developer, so be precise and comprehensive in your technical advice."""
+## Structured Response Approach
+1. **Initial Understanding**: Briefly confirm what you understand about the problem
+2. **Clarifying Questions**: Ask what you need to know for better analysis (don't assume!)
+3. **Analysis**: Provide detailed examination after gathering context
+4. **Recommendations**: Suggest specific approaches with clear trade-offs
+5. **Implementation Details**: Provide complete, working code examples when applicable
+6. **Open Questions**: Continue the conversation where helpful
+
+## Technical Analysis Focus
+When examining code:
+- Identify patterns, potential issues, and optimization opportunities
+- Reference specific files, functions, and line numbers (format: file.py:42)
+- Explain complex logic and architectural decisions
+- Consider security, performance, and maintainability implications
+- Think about edge cases, error handling, and failure modes
+- Check adherence to project standards (if provided in context files)
+- Suggest testing strategies and validation approaches
+
+## Collaboration Capabilities
+- When you need current information: "I would search for: [specific query] - Claude, could you search for this?"
+- When you need to see specific files: "Claude, can you show me [file path]?"
+- When you need to run commands: "Claude, please run '[command]' to verify..."
+- Be explicit about uncertainty and suggest verification steps
+- Request specific diagnostics or logs when debugging
+
+## Key Principles
+- **Think First**: Take time to understand the problem deeply before suggesting solutions
+- **Question Assumptions**: Don't accept requirements at face value if they seem problematic
+- **Consider Context**: Always think about how your suggestions fit the broader system
+- **Be Honest**: If an approach seems wrong, say so clearly with reasoning
+- **Stay Practical**: Balance ideal solutions with pragmatic constraints
+- **Remain Curious**: Each problem is an opportunity to learn something new
+
+Remember: The best solutions emerge from genuine technical dialogue. Your goal is to help achieve the best possible implementation through thoughtful analysis, engaging discussion, and collaborative problem-solving."""
 
 SYSTEM_PROMPT = os.getenv('SYSTEM_PROMPT', DEFAULT_SYSTEM_PROMPT)
 
@@ -198,17 +227,25 @@ class GeminiMCPServer:
         try:
             uploaded_file = client.files.upload(file=file_path)
             
-            # Wait for processing with timeout
-            timeout_seconds = 30
-            wait_time = 0
-            while uploaded_file.state == 'PROCESSING' and wait_time < timeout_seconds:
-                print(f"[{datetime.now().isoformat()}] Session {session.session_id}: File {file_name} is processing... ({wait_time}s)", file=sys.stderr)
-                await asyncio.sleep(1)
-                wait_time += 1
+            # Wait for processing with exponential backoff
+            wait_intervals = [0.5, 0.5, 1, 1, 2, 3, 5, 8]  # Exponential backoff pattern
+            total_wait = 0
+            max_wait = 20  # Reduced from 30 seconds
+            
+            for interval in wait_intervals:
+                if uploaded_file.state != 'PROCESSING':
+                    break
+                    
+                print(f"[{datetime.now().isoformat()}] Session {session.session_id}: File {file_name} is processing... ({total_wait:.1f}s)", file=sys.stderr)
+                await asyncio.sleep(interval)
+                total_wait += interval
                 uploaded_file = client.files.get(name=uploaded_file.name)
+                
+                if total_wait >= max_wait:
+                    break
             
             if uploaded_file.state == 'PROCESSING':
-                raise Exception(f"File processing timeout after {timeout_seconds} seconds")
+                raise Exception(f"File processing timeout after {max_wait} seconds")
             
             if uploaded_file.state == 'FAILED':
                 raise Exception(f"File upload failed: {getattr(uploaded_file, 'error', 'Unknown error')}")
@@ -360,24 +397,34 @@ async def consult_gemini(
             if attached_files:
                 context_parts.append("\n**Attached Files:**")
                 
+                # Create parallel upload tasks
+                print(f"[{datetime.now().isoformat()}] Session {session.session_id}: Starting parallel upload of {len(attached_files)} files", file=sys.stderr)
+                upload_tasks = []
                 for file_path in attached_files:
-                    try:
-                        print(f"[{datetime.now().isoformat()}] Session {session.session_id}: Processing file: {file_path}", file=sys.stderr)
-                        # Process file (upload to Gemini)
-                        file_info = await gemini_server._process_file(file_path, session)
+                    task = gemini_server._process_file(file_path, session)
+                    upload_tasks.append(task)
+                
+                # Execute all uploads in parallel
+                file_results = await asyncio.gather(*upload_tasks, return_exceptions=True)
+                
+                # Process results
+                for file_path, result in zip(attached_files, file_results):
+                    if isinstance(result, Exception):
+                        print(f"[{datetime.now().isoformat()}] Session {session.session_id}: Failed to process file {file_path}: {result}", file=sys.stderr)
+                        # Continue with other files instead of failing completely
+                        context_parts.append(f"\n- {os.path.basename(file_path)} (failed to upload: {str(result)})")
+                    else:
+                        # Success - file was uploaded
+                        file_info = result
+                        print(f"[{datetime.now().isoformat()}] Session {session.session_id}: File {file_info.file_name} processed successfully", file=sys.stderr)
                         
                         # Add file description
                         description = file_descriptions.get(file_path, "") if file_descriptions else ""
                         if description:
                             description = f" - {description}"
                         context_parts.append(f"\n- {file_info.file_name}{description}")
-                        
-                        print(f"[{datetime.now().isoformat()}] Session {session.session_id}: File {file_info.file_name} processed successfully", file=sys.stderr)
-                    
-                    except Exception as file_error:
-                        print(f"[{datetime.now().isoformat()}] Session {session.session_id}: Failed to process file {file_path}: {file_error}", file=sys.stderr)
-                        # Continue with other files instead of failing completely
-                        context_parts.append(f"\n- {file_path} (failed to upload: {str(file_error)})")
+                
+                print(f"[{datetime.now().isoformat()}] Session {session.session_id}: Parallel upload completed", file=sys.stderr)
             
             context_parts.append("\n\nPlease help me solve this problem. I may have follow-up questions, so please maintain context throughout our conversation.")
             
@@ -527,7 +574,7 @@ async def end_session(session_id: str) -> str:
         return f"Session {session_id} not found or already expired"
 
 if __name__ == "__main__":
-    print("Gemini Coding Assistant MCP Server v3.1 running (Python)", file=sys.stderr)
+    print("Gemini Coding Assistant MCP Server v3.0.0 running (Python)", file=sys.stderr)
     print("Features: Session management, file attachments, context persistence, follow-up questions, request tracking", file=sys.stderr)
     print("Ready to help with complex coding problems!", file=sys.stderr)
     

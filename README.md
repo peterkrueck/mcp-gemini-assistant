@@ -2,6 +2,8 @@
 
 A powerful MCP server that allows Claude Code to consult Gemini for complex coding problems with full code context and conversation persistence.
 
+> **Note**: This server works standalone but is highly recommended to use with the [Claude Code Development Kit](https://github.com/peterkrueck/Claude-Code-Development-Kit) for enhanced automation and context management.
+
 ## Key Features
 
 - **Session Management**: Maintain conversation context across multiple queries
@@ -13,6 +15,26 @@ A powerful MCP server that allows Claude Code to consult Gemini for complex codi
 - **Multiple Sessions**: Run multiple parallel conversations for different problems
 - **Session Expiry**: Automatic cleanup of inactive sessions after 1 hour
 - **Latest Model**: Uses Gemini 2.5 Pro (stable) by default
+
+## Integration with Claude Code Development Kit
+
+While this MCP server works standalone, it is **highly recommended and optimized** to use with the [Claude Code Development Kit](https://github.com/peterkrueck/Claude-Code-Development-Kit).
+
+### Enhanced Features with Development Kit
+
+The Development Kit transforms Claude Code into an orchestrated development environment that seamlessly integrates with this Gemini MCP server:
+
+1. **Automated Context Injection**: The `gemini-context-injector.sh` hook automatically attaches project-specific context files (MCP-ASSISTANT-RULES.md, project-structure.md) to new Gemini sessions
+2. **Multi-Agent Orchestration**: Complex commands spawn specialized agents that can consult Gemini for architectural decisions and design patterns
+3. **Enhanced System Prompt**: The MCP server's system prompt is designed to work with the Development Kit's context injection system
+4. **Security Scanning**: The `mcp-security-scan.sh` hook prevents sensitive data from being sent to external AI services
+5. **Seamless Integration**: Commands like `/full-context` automatically leverage Gemini for complex problems
+
+### Quick Setup with Development Kit
+
+1. Install the [Claude Code Development Kit](https://github.com/peterkrueck/Claude-Code-Development-Kit)
+2. Configure this MCP server as described in the installation section below
+3. The Development Kit's hooks will automatically enhance your Gemini interactions
 
 ## Purpose
 
@@ -178,9 +200,11 @@ Ready to help with complex coding problems!
 - Rate limiting prevents abuse
 - Sessions expire automatically
 - No persistent storage of code
+- When used with Claude Code Development Kit, additional security scanning prevents sensitive data leakage
 
 ## Version History
 
+- v3.0.0: Enhanced system prompt for Claude Code Development Kit integration
 - v2.1.0: Added file attachment system with automatic cleanup
 - v2.0.0: Added session management and follow-up support  
 - v1.0.0: Initial stateless implementation
